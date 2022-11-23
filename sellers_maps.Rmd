@@ -1,0 +1,198 @@
+---
+title: "jf_file"
+output: html_document
+date: "2022-11-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(vroom)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(rgdal)
+library(rgeos)
+library(patchwork)
+library(mapview)
+library(tmap)
+library(viridis)
+library(plotly)
+library(here)
+library(hrbrthemes)
+library(lubridate)
+library(htmlwidgets)
+```
+
+
+```{r, opening_files}
+orders_df <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_orders_dataset.csv")
+order_items_df <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_order_items_dataset.csv")
+sellers_df <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_sellers_dataset.csv")
+geo_df <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_geolocation_dataset.csv")
+product_df <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_products_dataset.csv")
+```
+2:25
+```{r,cleaning_data}
+
+orders_df <- orders_df %>% 
+  select(order_id,order_purchase_timestamp,order_delivered_customer_date)
+
+
+product_df <- product_df %>% 
+  select(product_id,product_category_name)
+
+seller_geo_df <- geo_df %>% 
+  rename(seller_zip_code_prefix = geolocation_zip_code_prefix,
+         seller_city = geolocation_city, 
+         seller_state = geolocation_state, 
+         lat = geolocation_lat, 
+         lng = geolocation_lng)
+
+
+
+order_items_df <- order_items_df %>%  
+  select(order_id,seller_id,price,product_id)
+
+
+orders_and_order_items <- merge(orders_df,order_items_df)
+
+orders_and_sellers_df <- merge(orders_and_order_items,sellers_df)
+
+sellers_coord_df <- orders_and_sellers_df %>% 
+  left_join(seller_geo_df %>% 
+              distinct(seller_zip_code_prefix,.keep_all = TRUE) %>% 
+              select(seller_zip_code_prefix,
+                     lat,
+                     lng),
+            by = "seller_zip_code_prefix") %>% 
+  filter(!is.na(lat),
+         !is.na(lng))
+
+
+orders_and_sellers_df <- merge(orders_and_sellers_df,product_df)
+
+
+```
+2:25
+```{r, cum_profitabiliy}
+
+agg_sellers_df <- orders_and_sellers_df %>% 
+  group_by(seller_id) %>% 
+  summarise(total_price = sum(price)) %>% 
+  arrange(desc(total_price)) %>% 
+  mutate(proportion = total_price/sum(total_price),
+         cumulative_proportion = cumsum(proportion),
+         number = seq(1:3095)) 
+  
+arrows <- tibble(
+    x1 = c(1010, 2800),
+    x2 = c(460, 3050),
+    y1 = c(0.55, 0.80), 
+    y2 = c(0.75, 0.98)
+  )
+
+
+
+
+ggplot(data = agg_sellers_df,aes(x = number,y  = cumulative_proportion)) + 
+  geom_line() + 
+  labs(x = "Number of sellers",y = "Proportion of Revenue",title = "Amount of sellers to reach 100% of Sales Revenue", 
+       subtitle = "Represented by their proportion of total sales") +
+  theme_minimal() + 
+  scale_y_continuous(labels = scales::percent) + 
+   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + 
+  annotate("label",x = 1000,y = 0.52, label ="75% of sales revenue are represented by only 434 sellers", family = "serif") + 
+ annotate("label",x = 2450,y = 0.73, label ="The other 25% of revenue are represented \nby 2661 sellers", family = "serif") + 
+   geom_curve( 
+    data = arrows, aes(x = x1, y = y1, xend = x2, yend = y2),
+    arrow = arrow(length = unit(0.08, "inch")), size = 0.5,
+    color = "gray20", curvature = 0.2) + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white"),
+    legend.position = "none") +labs(title = "75% of the Sales are represented by 25% of the Sellers",
+    caption = "Source: Brazilian E-commerce Public Dataset by Olist") +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+
+
+
+
+```
+
+```{r,generate shapefile, warning=FALSE, message=FALSE}
+
+# get Brazil states shapefile
+brazil_sf <- read_sf("bra_adm_ibge_2020_shp/bra_admbnda_adm1_ibge_2020.shp") %>% 
+  janitor::clean_names()
+
+
+brazil_sf <- brazil_sf %>% 
+ st_make_valid(brazil_sf) %>% 
+  st_set_crs(4326)
+
+
+
+
+sellers_coord_sf <-st_as_sf(sellers_coord_df, 
+                              coords=c('lng', 'lat'), 
+                              crs=4326)
+
+
+```
+2:25
+```{r,agg_data}
+
+sellers_coord_sf_agg <- sellers_coord_sf %>% 
+  group_by(seller_id) %>% 
+  summarise(amount_of_orders = n_distinct(order_id))
+
+```
+2:26
+```{r,plotting_points_25}
+
+library(gridExtra)
+
+ggplot() +
+  geom_sf(
+    data = brazil_sf, fill = "#79c753", size = 0.125, colour = "#ffffff" ) +
+   geom_sf(
+    data = sellers_coord_sf_agg,aes(size = amount_of_orders),
+    shape = 21, alpha = 0.25,fill = "#FFFF00",color = "#FFFF00",
+    show.legend = TRUE
+  ) + 
+  coord_sf(datum = NA) +
+  theme_minimal() + 
+  theme(axis.text = element_blank()) +
+  theme(strip.text = element_text(color = "white"))+
+  NULL + 
+  labs(title = "Location of sellers in Brazil",subtitle = "Sized according to their amount of orders") +
+  theme(legend.position = "none") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(title = "Most Sellers are concentrated in Sao Paolo",
+    subtitle = "Sized according to the number of orders", caption = "Source: Brazilian E-commerce Public Dataset by Olist") +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+
+
+```

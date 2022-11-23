@@ -1,0 +1,406 @@
+---
+title: "group project"
+author: "Jingyi Fang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(vroom)
+library(skimr)
+library(sf)
+library(hrbrthemes)
+library(tidyverse)
+library(lubridate)
+library(ggmap)
+library(ggrepel)
+library(gridExtra)
+library(pander)
+library(here)
+library(janitor)
+library(skimr)
+library(leaflet)
+library(tmap)
+library(tmaptools)
+library(mapview)
+```
+
+
+```{r}
+library(viridis)
+
+
+# read data
+orders <- read.csv("Olist_Dataset/olist_orders_dataset.csv")
+customers <- read.csv("Olist_Dataset/olist_customers_dataset.csv")
+geo <- read.csv("Olist_dataset/olist_geolocation_dataset.csv")
+
+# join the customers' order data
+c_order <- left_join(orders, customers, by = "customer_id")
+
+# join the customers' geo data
+customers <- customers %>%
+  rename(geolocation_zip_code_prefix = customer_zip_code_prefix)
+c_geo <- left_join(customers, geo, by = "geolocation_zip_code_prefix")
+
+#glimpse(c_order)
+```
+
+
+```{r}
+# add columes
+c_order <- c_order %>%
+  janitor::clean_names() %>%
+  mutate(order_purchase_timestamp = ymd_hms(order_purchase_timestamp),
+         order_approved_at = ymd_hms(order_approved_at),
+         order_delivered_carrier_date = ymd_hms(order_delivered_carrier_date),
+         order_delivered_customer_date = ymd_hms(order_delivered_customer_date),
+         order_estimated_delivery_date = ymd_hms(order_estimated_delivery_date)
+         )
+
+c_order <- c_order %>%
+  mutate(op_year = year(order_purchase_timestamp),
+         op_month = month(order_purchase_timestamp),
+         op_day = day(order_purchase_timestamp),
+         op_hour = hour(order_purchase_timestamp),
+ 
+         oa_year = year(order_approved_at),
+         oa_month = month(order_approved_at),
+         oa_day = day(order_approved_at),
+         oa_hour = hour(order_approved_at),
+        
+         odca_year = year(order_delivered_carrier_date),
+         odca_month = month(order_delivered_carrier_date),
+         odca_day = day(order_delivered_carrier_date),
+         odca_hour = hour(order_delivered_carrier_date),
+        
+         odcu_year = year(order_delivered_customer_date),
+         odcu_month = month(order_delivered_customer_date),
+         odcu_day = day(order_delivered_customer_date),
+         odcu_hour = hour(order_delivered_customer_date),
+        
+         oed_year = year(order_estimated_delivery_date),
+         oed_month = month(order_estimated_delivery_date),
+         oed_day = day(order_estimated_delivery_date),
+         oed_hour = hour(order_estimated_delivery_date))
+```
+
+
+```{r}
+# customer order by state
+mycols <- c("#009739", "#79B62B", "#9DBF27")
+
+c_order %>%
+  group_by(customer_state) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  slice_max(count, n=10) %>%
+  mutate(fills = ifelse(row_number() <= length(mycols), mycols, "#DEE0E3")) %>%
+  ggplot(aes(x = count, y = fct_reorder(customer_state, count),  fill = I(fills))) +
+  geom_col() +
+  geom_text(size = 4, aes(label=count), hjust = -.25, family = "serif") +
+  xlim(0,45000) +
+  theme_minimal()+
+  theme(
+        plot.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_blank())+
+  labs(title = "The largest number of consumers came from states of \nSão Paulo, followed by Rio de Janeiro and Minas Gerais",
+       subtitle = "Customer order by state (Top 10)",
+       x = "Count",
+       y = "State",
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif",
+        face = "plain"), axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(x = "Number of Orders", y = NULL, subtitle = "Customers ordered by state (Top 10)") + theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+```
+
+
+```{r}
+# customer order by year
+c_order %>%
+  group_by(op_year) %>%
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  slice_max(count, n=10) %>%
+  mutate(fills = ifelse(row_number() <= length(mycols), mycols, "#DEE0E3")) %>%
+  ggplot(aes(x = count, y = fct_reorder(as.factor(op_year), count),  fill = I(fills))) +
+  geom_col() +
+  geom_text(size = 3, aes(label=count), alpha = 0.5) +
+  theme_minimal()+
+  theme(axis.title=element_text(face="bold"), title=element_text(face="bold"),
+        plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "The number of orders increased continuously in past years",
+       subtitle = "Customer purchase order by year",
+       x = "Count",
+       y = "Year",
+       caption = "Source: Olist")
+```
+
+
+```{r}
+# split by San Paulo and other cities
+s_vs_others <- c_order %>%
+  mutate(loc = case_when(
+    customer_state %in% c("SP") ~ "SP",
+    TRUE ~ "OT"
+  ))
+
+s_vs_others %>%
+  group_by(op_year) %>%
+  filter(loc == "SP") %>%
+  summarise(conut_SP = n())
+s_vs_others %>%
+  group_by(op_year) %>%
+  filter(loc == "OT") %>%
+  summarise(conut_OT = n())
+
+s_vs_others <- read.csv("data.csv")
+s_vs_others %>%
+  ggplot(aes(x = op_year, y = count, fill = Location)) +
+  scale_fill_manual(values=c("#E6D21E", "#009739")) +
+  geom_col() +
+  theme_minimal()+
+  theme(
+        plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "San Paulo perform better within growing overall market",
+       subtitle = "Growth Rate from 2017-2018: San Paulo (34.4%), Others (10.2%)",
+       x = "Count",
+       y = "Year",
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif",
+        face = "plain"), axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97",colour = "white")) +labs(x = "Year", y = NULL) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20)) + theme(legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12),
+    legend.position = c(0.08, 0.8)) + theme(legend.background = element_rect(fill = "white"),
+    legend.position = c(0.1, 0.8))
+```
+
+
+```{r}
+# customer order by hour
+
+ggplot(c_order, aes(op_hour)) +
+  geom_density(colour = "#009739", size = 1) + 
+  theme_minimal()+
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "Customers tend to purchase between 10am to 8pm",
+       subtitle = "Customer purchase order by hour",
+       x = "Hour",
+       y = NULL,
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(subtitle = "Customer orders by hour") +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+```
+
+
+```{r}
+# mutate season column
+c_order <- c_order %>%
+  mutate(season = case_when(
+    op_month %in% c(3:5) ~ "Spring",
+    op_month %in% c(6:8) ~ "Summer",
+    op_month %in% c(9:11) ~ "Fall",
+    op_month %in% c(12:2) ~ "Winter",
+  )) 
+
+mycols <- c("#009739", "#79B62B", "#9DBF27")
+# customer order by season
+c_order %>%
+  group_by(season) %>% 
+  summarise(count = n()) %>%
+  arrange(desc(count)) %>%
+  mutate(fills = ifelse(row_number() <= length(mycols), mycols, "#DEE0E3")) %>% 
+  drop_na() %>% 
+  ggplot(aes(x = count, y = fct_reorder(season, count),  fill = I(fills))) +
+  geom_col() +
+  geom_text(size = 4, aes(label=count), hjust = -.25, family = "serif") +
+  theme_minimal()+
+  xlim(0,35000) +
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "There are highest orders in summer",
+       subtitle = "Customer purchase order by season",
+       x = "Count",
+       y = "Season",
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97",colour = "white")) +labs(y = NULL) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+```
+
+
+```{r}
+# calculate delivery time for each order
+c_order <- c_order %>%
+  mutate(delivery_time = as.numeric(order_delivered_customer_date - order_purchase_timestamp)
+  )
+
+# show delivery time in each season
+
+c_order %>%
+  filter(order_status == "delivered") %>%
+  drop_na() %>%
+  group_by(season) %>%
+  summarise(meantime = as.integer(mean(delivery_time))) %>%
+  arrange(desc(meantime)) %>%
+  mutate(fills = ifelse(row_number() <= length(mycols), mycols, "#DEE0E3")) %>%
+  ggplot(aes(x = meantime, y = fct_reorder(season, meantime),  fill = I(fills))) +
+  geom_col() +
+  geom_text(size = 4, aes(label=meantime), hjust = -.25, family = "serif") +
+  theme_minimal()+
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "It tooks longest time to deliver in winter",
+       subtitle = "Customer order delivery time by season",
+       x = "Delivery time in hours",
+       y = NULL,
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.x = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+```
+
+
+```{r}
+# show delivery time in each city
+mycols <- c("#009739", "#79B62B", "#9DBF27")
+c_order %>%
+  filter(order_status == "delivered") %>%
+  group_by(customer_city) %>%
+  summarise(meantime = as.integer(mean(delivery_time))) %>%
+  arrange(desc(meantime)) %>%
+  slice_max(meantime, n = 15) %>%
+  mutate(fills = ifelse(row_number() <= length(mycols), mycols, "#DEE0E3")) %>%
+  ggplot(aes(x = meantime, y = fct_reorder(customer_city, meantime),  fill = I(fills))) +
+  geom_col() +
+  geom_text(size = 4, aes(label=meantime), hjust = -.25, family = "serif") +
+  theme_minimal()+
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  xlim(0,3900) +
+  labs(title = "It tooks longest time to deliver in Novo Brasil,\nCapinzal do Norte, etc",
+       subtitle = "Customer order delivery time by city",
+       x = "Delivery time in hours",
+       y = "Season",
+       caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(y = NULL) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+
+```
+
+```{r}
+
+
+
+```
+
+
+```{r}
+
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+
+```
+
+```{r}
+
+```

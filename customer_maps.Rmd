@@ -1,0 +1,229 @@
+---
+title: "group project"
+author: "Zezhou Tang, Yiliu Wang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: zenburn
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+    code_folding: show
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r load-libraries, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(janitor)
+library(vroom)
+library(skimr)
+library(sf)
+library(hrbrthemes)
+library(tidyverse)
+library(lubridate)
+library(ggmap)
+library(ggrepel)
+library(gridExtra)
+library(pander)
+library(here)
+library(janitor)
+library(skimr)
+library(leaflet)
+library(tmap)
+library(tmaptools)
+library(mapview)
+library(viridis)
+library(maps)
+
+```
+
+```{r import data, message=FALSE, warning=FALSE}
+# read data
+orders <- read.csv("data/archive/olist_orders_dataset.csv")
+customers <- read.csv("data/archive/olist_customers_dataset.csv")
+geo <- read.csv("data/archive/olist_geolocation_dataset.csv")
+
+# join the customers' order data
+c_order <- left_join(orders, customers, by = "customer_id")
+
+# glimpse(c_order)
+
+```
+
+
+```{r clean data, message=FALSE, warning=FALSE}
+# add columns
+c_order <- c_order %>%
+  janitor::clean_names() %>%
+  mutate(order_purchase_timestamp = ymd_hms(order_purchase_timestamp),
+         order_approved_at = ymd_hms(order_approved_at),
+         order_delivered_carrier_date = ymd_hms(order_delivered_carrier_date),
+         order_delivered_customer_date = ymd_hms(order_delivered_customer_date),
+         order_estimated_delivery_date = ymd_hms(order_estimated_delivery_date)
+         )
+
+c_order <- c_order %>%
+  mutate(op_year = year(order_purchase_timestamp),
+         op_month = month(order_purchase_timestamp),
+         op_month_name = month(order_purchase_timestamp, label = TRUE, abbr = TRUE),
+         op_day = day(order_purchase_timestamp),
+         op_hour = hour(order_purchase_timestamp),
+
+         oa_year = year(order_approved_at),
+         oa_month = month(order_approved_at),
+         oa_month_name = month(order_approved_at, label = TRUE, abbr = TRUE),
+         oa_day = day(order_approved_at),
+         oa_hour = hour(order_approved_at),
+        
+         odca_year = year(order_delivered_carrier_date),
+         odca_month = month(order_delivered_carrier_date),
+         odca_month_name = month(order_delivered_carrier_date, label = TRUE, abbr = TRUE),
+         odca_day = day(order_delivered_carrier_date),
+         odca_hour = hour(order_delivered_carrier_date),
+        
+         odcu_year = year(order_delivered_customer_date),
+         odcu_month = month(order_delivered_customer_date),
+         odcu_month_name = month(order_delivered_customer_date, label = TRUE, abbr = TRUE),
+         odcu_day = day(order_delivered_customer_date),
+         odcu_hour = hour(order_delivered_customer_date),
+        
+         oed_year = year(order_estimated_delivery_date),
+         oed_month = month(order_estimated_delivery_date),
+         oed_month_name = month(order_estimated_delivery_date, label = TRUE, abbr = TRUE),
+         oed_day = day(order_estimated_delivery_date),
+         oed_hour = hour(order_estimated_delivery_date))
+
+```
+
+```{r customer-geo data, message=FALSE, warning=FALSE}
+# calculate delivery time for each order
+c_order <- c_order %>%
+  mutate(delivery_time = as.numeric(order_delivered_customer_date - order_purchase_timestamp)
+  )
+
+# join the customers' geo data
+c_geo <- geo %>%
+  rename(customer_zip_code_prefix = geolocation_zip_code_prefix,
+         lat = geolocation_lat,
+         lng = geolocation_lng) %>% 
+  left_join(c_order %>% 
+              select(customer_zip_code_prefix, order_id, 
+                     customer_id, customer_unique_id,
+                     delivery_time),
+            by = "customer_zip_code_prefix") 
+
+# calculate volumes of each state
+c_geo_by_state <- c_geo %>% 
+  group_by(geolocation_state) %>% 
+  summarise(count = n())
+
+glimpse(c_geo)
+# calculate average delivery time of each state
+delivery_by_state <- c_geo %>% 
+  group_by(geolocation_state) %>% 
+  summarise(mean_delivery = mean(delivery_time, na.rm=TRUE)) 
+
+```
+
+
+```{r generate shapefile, warning=FALSE, message=FALSE}
+
+# get Brazil states shapefile
+brazil_sf <- read_sf(here::here("data/brazil_admin","BRA_adm1.shp")) %>% 
+  janitor::clean_names()
+
+# glimpse(brazil_sf)
+
+brazil_sf <- brazil_sf %>% 
+  separate(hasc_1, 
+           into = c("country", "state"), 
+           sep = 3)
+# check the geometry
+st_geometry(brazil_sf)
+
+# join volume with geography
+brazil_sf_volume <- brazil_sf %>%
+  rename(geolocation_state = state) %>% 
+  left_join(c_geo_by_state, 
+            by = "geolocation_state")
+
+# join delivery time with geography
+brazil_sf_delivery <- brazil_sf %>% 
+  rename(geolocation_state = state) %>% 
+  left_join(delivery_by_state,
+            by = "geolocation_state")
+
+```
+
+
+```{r customer-geo map, warning=FALSE, message=FALSE}
+# order volumes by state
+ggplot(data = brazil_sf_volume, aes(fill = count/1000)) +
+  geom_sf() +
+  coord_sf(datum = NA) +
+  scale_fill_gradient(low = "#e8f4ff", high = "#00264b") +
+  theme_minimal()+
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "Most customers come from \nSourth Eastern area of Brazil",
+     subtitle = "Order volumes by state",
+     x = "",
+     y = "",
+     fill = "Volumes (k)",
+     caption = "Source: Brazilian E-commerce Public Dataset by Olist") +
+  theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20)) 
+
+# delivery time by state
+ggplot(data = brazil_sf_delivery, aes(fill = mean_delivery)) +
+  geom_sf(colour = "white") +
+  coord_sf(datum = NA) +
+  scale_fill_gradient(low = "#e8f4ff", high = "#004686") +
+  theme_minimal()+
+  theme(plot.background = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank())+
+  labs(title = "Delivery time in North Western \narea is much longer",
+     subtitle = "Customer order delivery time by state",
+     x = "",
+     y = "",
+     fill = "Delivery time (h)",
+     caption = "Source: Brazilian E-commerce Public Dataset by Olist") +
+  theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(linetype = "blank"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.text = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(y = NULL) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20)) +
+  geom_sf_text(aes(label = geolocation_state), size = 2)
+
+```

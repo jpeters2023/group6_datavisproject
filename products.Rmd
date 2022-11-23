@@ -1,0 +1,127 @@
+---
+title: "Group work"
+output: html_document
+date: "2022-11-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+```{r, warning = FALSE}
+
+data_prod <- read.csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_products_dataset.csv")
+data_order <- read.csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_order_items_dataset.csv")
+data_trans <-read.csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/product_category_name_translation.csv")
+data_geo <-read.csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_geolocation_dataset.csv")
+
+```
+```{r, warning=FALSE}
+library(tidyverse)  # Load ggplot2, dplyr, and all the other tidyverse packages
+library(mosaic)
+library(ggthemes)
+library(lubridate)
+library(here)
+library(skimr)
+library(janitor)
+library(vroom)
+library(tidyquant)
+library(sf)
+library(mapview)
+library(scales)
+library(lubridate)
+
+```
+```{r}
+
+df <- merge(x = data_order, y = data_prod, by = "product_id",
+                                 all.x = TRUE)
+df1 <- merge(df, data_trans, by="product_category_name")
+df <- df %>% clean_names()
+df1 <- df1 %>% clean_names()
+
+df2 <- merge(df1, data_geo, )
+
+skim(df)
+
+```
+
+```{r}
+df1 %>% 
+  mutate(total = price * order_item_id) %>% 
+  group_by(product_category_name_english) %>% 
+  summarise(n = count(product_category_name_english),
+            sum_price = sum(total)) %>%
+  slice_max(n,n=10) %>% 
+  ggplot(aes(x=reorder(product_category_name_english, -n), y = n, fill=sum_price)) +
+  geom_col() +
+  scale_fill_continuous(high = "#132B43", low = "#56B1F7") +
+  theme_minimal() +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) +
+  geom_text(aes(label = n), vjust = -0.2, size = 3, family = "serif") +
+  labs(title = "To Brazilians Sleep, Health and Beauty comes first!",
+       subtitle = "Profitability increases with the darkness of the colour",
+       x = "Product Categories",
+       y = NULL) +
+  scale_x_discrete(labels=c("Bed, Bath \nand Table", "Health and\n Beauty", "Sports and Leisure", "Furniture and Decor", "Computers \nand accesories", "Housewares","Watches and gifts","Telephones","Garden Tools","Auto")) +
+  theme(legend.position = "none") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white"))+labs(caption = "Source: Brazilian E-commerce Public Dataset by Olist") +
+    theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 12),
+    axis.text = element_text(size = 10),
+    plot.title = element_text(size = 20))
+
+
+  
+```
+
+
+
+```{r}
+x <- data_order %>% 
+  group_by(order_id) %>% 
+  summarise(total_f = sum(freight_value),
+            total_p = sum(price*order_item_id),
+            fill_colour = ifelse(total_f>total_p,
+                                 "100",
+                                 ifelse(total_f>.5*total_p,
+                                        "50",
+                                        ifelse(total_f>.2*total_p,
+                                               "20",
+                                               "okay"))))
+
+                                                     
+x %>% count(fill_colour)
+  
+ggplot(data = x,aes(x=total_f, y=total_p)) +
+  geom_point(aes(color= fill_colour)) +
+  geom_abline(intercept = 0, slope = 1) +
+  geom_abline(intercept = 0, slope = 2) +
+  geom_abline(intercept = 0, slope = 5) +
+  ylim(0,1000) + xlim(0,500) +
+  scale_color_manual(values = c("#7ce8ff","#00acdf","#55d0ff","#0080bf")) +
+  theme_minimal() +
+  theme(legend.position = "none") + theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    panel.grid.major = element_line(colour = NA,
+        linetype = "blank"), panel.grid.minor = element_line(colour = NA,
+        linetype = "blank"), axis.title = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(title = "About 50% of Orders are Profitable, if Olist takes 20% of the Revenue Share",
+    x = "Freigth Value per Order", y = "Total Price per Order",
+    subtitle = "Points below the line represent the unprofitable order for 20%, 50% and 100% revenue share",
+    caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(axis.text = element_text(family = "serif"))
+
+```
+
+
+

@@ -1,0 +1,167 @@
+---
+title: "Olist visualizations"
+author: "Wybe Harms"
+date: "2022-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r, echo = FALSE}
+library(tidyverse)
+library(extrafont)
+library(vroom)
+library(ggtext)
+library(gapminder)
+library(ggrepel)
+library(patchwork)
+library(gghighlight)
+library(skimr)
+library(tmap)
+library(tmaptools)
+library(mapview)
+library(sf)
+library(lubridate)
+library(dplyr)
+```
+
+
+```{r, load data}
+orders_data <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_orders_dataset.csv")
+order_items_data <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_order_items_dataset.csv")
+sellers_data <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_sellers_dataset.csv")
+goelocation_data <- read_csv("/Users/sonakshigupta/Desktop/Data Visualisation/Data Visualisation/Olist_Dataset/olist_geolocation_dataset.csv")
+
+```
+
+
+```{r}
+#rename to lng and lat
+goelocation_renamed <- goelocation_data %>% 
+  rename(lng = geolocation_lng,
+         lat = geolocation_lat,
+         seller_zip_code_prefix = geolocation_zip_code_prefix)
+
+goelocation_sf <-  st_as_sf(goelocation_renamed, 
+                              coords=c('lng', 'lat'), 
+                              crs = 4326)
+```
+
+```{r}
+order_items_by_seller <- order_items_data%>%
+  group_by(seller_id) %>% 
+  summarize(count = n(),
+            total_price = sum(price),
+            total_freight_value = sum(freight_value),
+            avg_price = round(total_price/count,2),
+            avg_freight_value = round(total_freight_value/count,2)) %>% 
+  mutate(price_per_kg = round((avg_price/avg_freight_value),2)) %>% 
+  select(-total_price, -total_freight_value)
+
+order_items_with_city <- order_items_by_seller %>% 
+  left_join(sellers_data, by= "seller_id")
+```
+
+
+```{r}
+library(viridis)
+
+order_items_with_city %>% 
+  filter(count > 10) %>% 
+  group_by(seller_city) %>% 
+  summarize(count_city = n(),
+            total_price_per_kg = sum(price_per_kg),
+            avg_price_per_kg = round(total_price_per_kg/count_city, 2)) %>% 
+  slice_max(order_by = avg_price_per_kg, n = 10) %>% 
+  ggplot(aes(x = reorder(seller_city,-avg_price_per_kg), y = avg_price_per_kg, fill = avg_price_per_kg)) +
+  geom_col() +
+  theme(text = element_text(size=10),
+        axis.text.x = element_text(angle=45, hjust=1))+
+  scale_fill_gradient(low = "#4FA095", high = "#153462")+
+  geom_text(aes(label = avg_price_per_kg), vjust = -0.2, size = 3, family = "serif") +
+  theme_minimal() + theme(plot.subtitle = element_text(family = "serif"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    axis.title = element_text(family = "serif"),
+    plot.title = element_text(family = "serif"),
+    legend.position = "none") +labs(title = "Some Regions Sell more Valuable Products than Others",
+    x = "City", y = NULL, subtitle = "Price/Kg")+
+  theme(text = element_text(size=10),
+        axis.text.x = element_text(angle=45, hjust=1)) + theme(plot.caption = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(caption = "Source: Brazilian E-commerce Public Dataset by Olist") + theme(panel.grid.major = element_line(linetype = "blank")) +
+    theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+```
+
+```{r}
+order_items_with_city$avg_price_cat <-cut(order_items_with_city$avg_price, seq(0,500,25))
+
+order_items_with_city<- order_items_with_city %>% 
+  mutate(avg_price_cat = as.character(avg_price_cat)) %>% 
+  mutate(avg_price_num = as.numeric(gsub(".*?([0-9]+).*", "\\1", avg_price_cat)))
+
+colour_fill = c("#009739","#0C9A38","#179D36","#23A035","#2EA334","#3AA632","#45A931","#51AC30","#5CAF2E","#68B22D","#73B52C","#7FB72A","#8ABA29","#96BD27","#A1C026","#ADC325","#B8C623","#C4C922","#DBCF1F","#E6D21E")
+order_items_with_city %>% 
+  filter(avg_price<500) %>% 
+  ggplot(aes(x = avg_price_num))+
+  geom_bar(fill = colour_fill) + theme(panel.grid.minor = element_line(linetype = "blank"),
+    panel.background = element_rect(fill = "gray97")) +labs(title = "Average price per seller concentrated between 50 - 200 Real",
+    x = NULL, subtitle = "100R = 16£")+
+  theme_minimal() +
+  theme(plot.subtitle = element_text(family = "serif"),
+    plot.caption = element_text(family = "serif"),
+    axis.title = element_text(family = "serif"),
+    plot.title = element_text(family = "serif")) +labs(title = "Average Price per Seller concentrated between 50 - 200 Real",
+    x = "Average Price", y = "",
+    caption = "Source: Brazilian E-Commerce Public Dataset by Olist") + theme(panel.grid.minor = element_line(linetype = "blank"),
+    panel.background = element_rect(fill = "gray97", colour = "white")) +labs(y = NULL) + theme(axis.text = element_text(family = "serif")) +
+    theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+
+```
+
+
+```{r}
+orders_data_date <- orders_data %>%
+  mutate(day = date(order_approved_at))
+
+orders_data_date<- orders_data_date %>% 
+  group_by(day) %>% 
+  mutate(count = n())
+
+#Add dates until 2020
+additional_dates <- seq(as.Date(""), by = "day")
+
+ggplot(orders_data_date, aes(day, count))+
+  geom_point()+
+  geom_smooth(method = "lm", colour="#31a354") + 
+  theme(plot.subtitle = element_text(family = "serif"),
+    panel.grid.minor = element_line(linetype = "blank"),
+    plot.title = element_text(family = "serif"),
+    panel.background = element_rect(fill = "gray97")) +labs(title = "Constant Increase in Daily Sales",
+    x = "Date", y = NULL, subtitle = "Outliers suspected to be due to Black Friday Sales and FIFA World Cup") + theme(plot.caption = element_text(family = "serif"),
+    axis.title = element_text(family = "serif"),
+    axis.text = element_text(family = "serif"),
+    axis.text.y = element_text(family = "serif")) +labs(caption = "Source: Brazilian E-Commerce Public Dataset by Olist") +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20)) + theme(legend.text = element_text(size = 10),
+    legend.title = element_text(size = 12)) +
+  theme(plot.subtitle = element_text(size = 15),
+    plot.caption = element_text(size = 10),
+    axis.title = element_text(size = 15),
+    axis.text = element_text(size = 12),
+    plot.title = element_text(size = 20))
+
+```
